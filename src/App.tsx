@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { ProjectDetail } from './components/ProjectDetail'
 import { TerminalView } from './components/TerminalView'
+import { StatusDashboard } from './components/StatusDashboard'
 import { PortConflictModal } from './components/PortConflictModal'
 import { TitleBar } from './components/TitleBar'
 import { ProjectItem, RunningTask, PortConflictInfo, SystemEnvInfo } from './types'
@@ -58,9 +59,19 @@ export const App: React.FC = () => {
         setConflictModal(conflict)
       })
 
+      // 定期刷新任务及内存指标
+      const tasksTimer = setInterval(() => {
+        window.electronAPI.getRunningTasks().then((tasks) => {
+          if (tasks.length > 0) {
+            setRunningTasks(tasks)
+          }
+        })
+      }, 2000)
+
       return () => {
         unsubStatus()
         unsubConflict()
+        clearInterval(tasksTimer)
       }
     }
   }, [])
@@ -247,15 +258,27 @@ export const App: React.FC = () => {
                 />
               </div>
 
-              {/* 下部：极客终端控制台 */}
-              <div className="flex-1 min-h-[220px] flex flex-col overflow-hidden">
-                <TerminalView
-                  activeTaskId={activeTaskId}
-                  runningTasks={runningTasks}
-                  onStopTask={handleStopScript}
-                  onSelectTask={(taskId) => setActiveTaskId(taskId)}
-                  onOpenExternal={(url) => window.electronAPI?.openExternal(url)}
-                />
+              {/* 下部：极客终端控制台与实时监控仪表盘 (左右分栏) */}
+              <div className="flex-1 min-h-[220px] flex overflow-hidden">
+                {/* 左侧：原控制台信息展示 */}
+                <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
+                  <TerminalView
+                    activeTaskId={activeTaskId}
+                    runningTasks={runningTasks}
+                    onStopTask={handleStopScript}
+                    onSelectTask={(taskId) => setActiveTaskId(taskId)}
+                    onOpenExternal={(url) => window.electronAPI?.openExternal(url)}
+                  />
+                </div>
+
+                {/* 右侧：前端项目运行内容、LaunchPad 内存、电脑内存、CPU 等信息展示模块 */}
+                <div className="w-80 md:w-96 lg:w-[380px] flex-shrink-0 flex flex-col overflow-hidden">
+                  <StatusDashboard
+                    currentProject={selectedProject}
+                    runningTasks={runningTasks}
+                    activeTaskId={activeTaskId}
+                  />
+                </div>
               </div>
             </div>
           ) : (

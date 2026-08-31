@@ -1,8 +1,17 @@
-import { spawn, ChildProcess } from 'node:child_process'
+import { spawn, ChildProcess, exec } from 'node:child_process'
+import util from 'node:util'
 import treeKill from 'tree-kill'
 import { BrowserWindow } from 'electron'
 import { RunningTask, PortConflictInfo } from '../src/types'
 import { getProcessByPort } from './portManager'
+
+const execPromise = util.promisify(exec)
+
+interface ProcessNode {
+  pid: number
+  ppid: number
+  memory: number // bytes
+}
 
 export class ProcessManager {
   private tasks = new Map<string, {
@@ -19,6 +28,92 @@ export class ProcessManager {
 
   getRunningTasks(): RunningTask[] {
     return Array.from(this.tasks.values()).map(item => item.task)
+  }
+
+  async getRunningTasksWithMemory(): Promise<RunningTask[]> {
+    const list = this.getRunningTasks()
+    if (list.length === 0) return []
+
+    try {
+      const getTreeMem = await this.getProcessTreeMemoryCalculator()
+      for (const item of list) {
+        if (item.pid) {
+          item.memoryUsage = getTreeMem(item.pid)
+        }
+      }
+    } catch {}
+
+    return list
+  }
+
+  private async getProcessTreeMemoryCalculator(): Promise<(rootPid: number) => number> {
+    const isWin = process.platform === 'win32'
+    const nodes: ProcessNode[] = []
+
+    try {
+      if (isWin) {
+        const { stdout } = await execPromise('wmic process get ParentProcessId,ProcessId,WorkingSetSize /format:csv', { windowsHide: true })
+        const lines = stdout.split(/\r?\n/)
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed || trimmed.startsWith('Node')) continue
+          const parts = trimmed.split(',')
+          if (parts.length >= 4) {
+            const ppid = parseInt(parts[1], 10)
+            const pid = parseInt(parts[2], 10)
+            const mem = parseInt(parts[3], 10)
+            if (!isNaN(pid) && !isNaN(mem)) {
+              nodes.push({ pid, ppid: isNaN(ppid) ? 0 : ppid, memory: mem })
+            }
+          }
+        }
+      } else {
+        const { stdout } = await execPromise('ps -eo pid,ppid,rss', { windowsHide: true })
+        const lines = stdout.split(/\r?\n/)
+        for (const line of lines) {
+          const trimmed = line.trim()
+          if (!trimmed || trimmed.startsWith('PID')) continue
+          const parts = trimmed.split(/\s+/)
+          if (parts.length >= 3) {
+            const pid = parseInt(parts[0], 10)
+            const ppid = parseInt(parts[1], 10)
+            const rssKb = parseInt(parts[2], 10)
+            if (!isNaN(pid) && !isNaN(rssKb)) {
+              nodes.push({ pid, ppid: isNaN(ppid) ? 0 : ppid, memory: rssKb * 1024 })
+            }
+          }
+        }
+      }
+    } catch {}
+
+    const childrenMap = new Map<number, number[]>()
+    const memMap = new Map<number, number>()
+    for (const n of nodes) {
+      memMap.set(n.pid, n.memory)
+      if (!childrenMap.has(n.ppid)) {
+        childrenMap.set(n.ppid, [])
+      }
+      childrenMap.get(n.ppid)!.push(n.pid)
+    }
+
+    return (rootPid: number): number => {
+      let total = memMap.get(rootPid) || 0
+      const queue = [rootPid]
+      const visited = new Set<number>([rootPid])
+
+      while (queue.length > 0) {
+        const current = queue.shift()!
+        const children = childrenMap.get(current) || []
+        for (const child of children) {
+          if (!visited.has(child)) {
+            visited.add(child)
+            total += memMap.get(child) || 0
+            queue.push(child)
+          }
+        }
+      }
+      return total
+    }
   }
 
   getTask(taskId: string): RunningTask | undefined {

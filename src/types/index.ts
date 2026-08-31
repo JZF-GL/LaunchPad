@@ -18,6 +18,7 @@ export interface RunningTask {
   startTime: number
   status: 'running' | 'stopping' | 'stopped' | 'error'
   exitCode?: number | null
+  memoryUsage?: number // 进程树占用物理内存 (bytes)
 }
 
 export interface PortConflictInfo {
@@ -37,4 +38,24 @@ export interface SystemEnvInfo {
   yarnVersion?: string
   bunVersion?: string
   platform: string
+}
+
+export interface SystemMetrics {
+  appMemory: {
+    rss: number
+    heapUsed: number
+    heapTotal: number
+  }
+  systemMemory: {
+    total: number
+    free: number
+    used: number
+    usagePercent: number
+  }
+  cpu: {
+    model: string
+    cores: number
+    usagePercent: number
+    arch: string
+  }
 }

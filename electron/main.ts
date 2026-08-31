@@ -1,11 +1,12 @@
 import { app, BrowserWindow, ipcMain, dialog, shell } from 'electron'
 import path from 'node:path'
+import os from 'node:os'
 import { exec } from 'node:child_process'
 import util from 'node:util'
 import { scanProject } from './projectScanner'
 import { processManager } from './processManager'
 import { getProcessByPort, killPort } from './portManager'
-import { SystemEnvInfo } from '../src/types'
+import { SystemEnvInfo, SystemMetrics } from '../src/types'
 
 const execPromise = util.promisify(exec)
 
@@ -132,9 +133,9 @@ function setupIpcHandlers() {
     return processManager.stopScript(taskId)
   })
 
-  // 获取所有运行中任务
+  // 获取所有运行中任务 (包含实时进程内存)
   ipcMain.handle('script:get-running-tasks', async () => {
-    return processManager.getRunningTasks()
+    return processManager.getRunningTasksWithMemory()
   })
 
   // 获取任务的历史日志
@@ -200,6 +201,67 @@ function setupIpcHandlers() {
     } catch {}
 
     return info
+  })
+
+  // 获取实时硬件与应用指标
+  let prevCpuTimes: { idle: number; total: number } | null = null
+
+  function getCpuUsage(): number {
+    const cpus = os.cpus()
+    let idle = 0
+    let total = 0
+
+    for (const cpu of cpus) {
+      for (const type in cpu.times) {
+        total += (cpu.times as any)[type]
+      }
+      idle += cpu.times.idle
+    }
+
+    if (!prevCpuTimes) {
+      prevCpuTimes = { idle, total }
+      return 0
+    }
+
+    const idleDiff = idle - prevCpuTimes.idle
+    const totalDiff = total - prevCpuTimes.total
+    prevCpuTimes = { idle, total }
+
+    if (totalDiff <= 0) return 0
+    const usage = Math.round((1 - idleDiff / totalDiff) * 100)
+    return Math.max(0, Math.min(100, usage))
+  }
+
+  ipcMain.handle('system:get-metrics', async (): Promise<SystemMetrics> => {
+    const memUsage = process.memoryUsage()
+    const totalMem = os.totalmem()
+    const freeMem = os.freemem()
+    const usedMem = totalMem - freeMem
+    const memPercent = Math.round((usedMem / totalMem) * 100)
+
+    const cpus = os.cpus()
+    const cpuModel = cpus.length > 0 ? cpus[0].model.trim() : 'Unknown CPU'
+    const cpuPercent = getCpuUsage()
+
+    return {
+      appMemory: {
+        rss: memUsage.rss,
+        heapUsed: memUsage.heapUsed,
+        heapTotal: memUsage.heapTotal,
+      },
+      systemMemory: {
+        total: totalMem,
+        free: freeMem,
+        used: usedMem,
+        usagePercent: memPercent,
+      },
+      cpu: {
+        model: cpuModel,
+        cores: cpus.length,
+        usagePercent: cpuPercent,
+        arch: os.arch(),
+      },
+    }
   })
 
   // 自定义窗口控制

@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { ProjectItem, RunningTask, PortConflictInfo, SystemEnvInfo } from '../src/types'
+import { ProjectItem, RunningTask, PortConflictInfo, SystemEnvInfo, SystemMetrics } from '../src/types'
 
 const api = {
   // 对话框与扫描
@@ -28,6 +28,7 @@ const api = {
   openExternal: (url: string) => ipcRenderer.invoke('shell:open-external', url),
   openVSCode: (folderPath: string): Promise<{ success: boolean; message?: string }> => ipcRenderer.invoke('shell:open-vscode', folderPath),
   getSystemEnv: (): Promise<SystemEnvInfo> => ipcRenderer.invoke('system:get-env'),
+  getSystemMetrics: (): Promise<SystemMetrics> => ipcRenderer.invoke('system:get-metrics'),
 
   // 自定义窗口控制
   minimizeWindow: (): Promise<void> => ipcRenderer.invoke('window:minimize'),
