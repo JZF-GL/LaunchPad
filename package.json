@@ -1,6 +1,6 @@
 {
   "name": "launchpad",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Developer-centric Frontend Project Launcher & Manager",
   "main": "dist-electron/main.js",
