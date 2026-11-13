@@ -2,6 +2,7 @@
 export default {
   content: [
     "./index.html",
+    "./floating.html",
     "./src/**/*.{js,ts,jsx,tsx}",
   ],
   darkMode: 'class',

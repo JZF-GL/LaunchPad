@@ -20,10 +20,33 @@ export class ProcessManager {
     outputBuffer: string[]
   }>()
 
+  /** 主窗口：接收终端日志、端口冲突等高频/主界面专属事件 */
   private win: BrowserWindow | null = null
+  /** 所有需要接收任务状态变更的窗口（主窗口 + 悬浮快捷方式窗口） */
+  private windows = new Set<BrowserWindow>()
 
   setWindow(win: BrowserWindow) {
     this.win = win
+    this.addWindow(win)
+  }
+
+  /** 注册一个需要接收任务状态广播的窗口 */
+  addWindow(win: BrowserWindow) {
+    this.windows.add(win)
+    win.once('closed', () => this.windows.delete(win))
+  }
+
+  removeWindow(win: BrowserWindow) {
+    this.windows.delete(win)
+  }
+
+  /** 向所有已注册窗口广播事件 */
+  private broadcast(channel: string, payload: unknown) {
+    for (const target of this.windows) {
+      if (!target.isDestroyed()) {
+        target.webContents.send(channel, payload)
+      }
+    }
   }
 
   getRunningTasks(): RunningTask[] {
@@ -256,7 +279,7 @@ export class ProcessManager {
   }
 
   private notifyTaskStatusChange(task: RunningTask) {
-    this.win?.webContents.send('task:status-change', task)
+    this.broadcast('task:status-change', task)
   }
 
   /**

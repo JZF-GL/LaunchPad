@@ -6,14 +6,23 @@ import {
   X,
   Zap,
   FolderGit2,
+  Pin,
 } from 'lucide-react'
 import { ProjectItem } from '../types'
 
 interface TitleBarProps {
   currentProject: ProjectItem | null
+  shortcutCount: number
+  isFloatingMode: boolean
+  onToggleFloatingMode: () => void
 }
 
-export const TitleBar: React.FC<TitleBarProps> = ({ currentProject }) => {
+export const TitleBar: React.FC<TitleBarProps> = ({
+  currentProject,
+  shortcutCount,
+  isFloatingMode,
+  onToggleFloatingMode,
+}) => {
   const [isMaximized, setIsMaximized] = useState(false)
 
   useEffect(() => {
@@ -87,6 +96,33 @@ export const TitleBar: React.FC<TitleBarProps> = ({ currentProject }) => {
 
       {/* 右侧：原生级自定义窗口控制按钮 */}
       <div className="flex items-center space-x-1 non-draggable">
+        {/* 切换悬浮快捷方式模式 */}
+        <button
+          onClick={onToggleFloatingMode}
+          title={
+            isFloatingMode
+              ? '退出悬浮快捷方式模式，返回主界面'
+              : '切换为悬浮快捷方式图标（主窗口收起到任务栏之外）'
+          }
+          className={`h-7 mr-1 px-2 flex items-center gap-1.5 rounded border text-[11px] font-medium transition-colors ${
+            isFloatingMode
+              ? 'bg-accent-blue/15 border-accent-blue/50 text-accent-blue'
+              : 'bg-dark-800 border-dark-600 text-dark-300 hover:text-dark-100 hover:border-dark-500'
+          }`}
+        >
+          <Pin className="w-3 h-3" />
+          <span>快捷方式</span>
+          <span
+            className={`min-w-[16px] h-4 px-1 rounded-full text-[9px] font-bold flex items-center justify-center ${
+              shortcutCount > 0
+                ? 'bg-accent-amber/20 text-accent-amber'
+                : 'bg-dark-700 text-dark-500'
+            }`}
+          >
+            {shortcutCount}
+          </span>
+        </button>
+
         {/* 最小化 */}
         <button
           onClick={handleMinimize}

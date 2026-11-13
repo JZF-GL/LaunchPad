@@ -48,6 +48,16 @@ export default defineConfig({
       '@': path.resolve(__dirname, './src'),
     },
   },
+  build: {
+    rollupOptions: {
+      input: {
+        // 主窗口
+        index: path.resolve(__dirname, 'index.html'),
+        // 悬浮快捷方式小窗口
+        floating: path.resolve(__dirname, 'floating.html'),
+      },
+    },
+  },
   plugins: [
     react(),
     electron([

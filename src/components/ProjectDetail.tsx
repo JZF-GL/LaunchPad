@@ -13,15 +13,18 @@ import {
   AlertTriangle,
   LayoutGrid,
   Zap,
+  Pin,
 } from 'lucide-react'
-import { ProjectItem, RunningTask } from '../types'
+import { ProjectItem, RunningTask, ShortcutItem } from '../types'
 import { getFrameworkBadgeClass } from '../utils/colors'
 
 interface ProjectDetailProps {
   project: ProjectItem
   runningTasks: RunningTask[]
+  shortcuts: ShortcutItem[]
   onRunScript: (scriptName: string, customArgs?: string) => void
   onStopScript: (taskId: string) => void
+  onToggleShortcut: (scriptName: string, customArgs?: string) => void
   onRefreshProject: () => void
   onOpenFolder: (path: string) => void
   onOpenVSCode: (path: string) => void
@@ -32,8 +35,10 @@ interface ProjectDetailProps {
 export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   project,
   runningTasks,
+  shortcuts,
   onRunScript,
   onStopScript,
+  onToggleShortcut,
   onRefreshProject,
   onOpenFolder,
   onOpenVSCode,
@@ -61,6 +66,9 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
   }
 
   const scripts = Object.entries(project.scripts || {})
+
+  const isShortcut = (scriptName: string) =>
+    shortcuts.some((s) => s.projectId === project.id && s.scriptName === scriptName)
 
   const getScriptTask = (scriptName: string) => {
     const taskId = `${project.id}::${scriptName}`
@@ -290,6 +298,19 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                   </div>
 
                   <div className="flex items-center gap-1 flex-shrink-0">
+                    <button
+                      onClick={() => onToggleShortcut(scriptName, customArgsMap[scriptName])}
+                      title={isShortcut(scriptName) ? '从快捷方式中移除' : '添加到悬浮快捷方式'}
+                      className={`p-1 rounded transition-colors ${
+                        isShortcut(scriptName)
+                          ? 'text-accent-amber bg-accent-amber/10 hover:bg-accent-amber/20'
+                          : 'text-dark-500 hover:text-dark-200 hover:bg-dark-700'
+                      }`}
+                    >
+                      <Pin
+                        className={`w-3 h-3 ${isShortcut(scriptName) ? 'fill-current' : ''}`}
+                      />
+                    </button>
                     {isRunning ? (
                       <>
                         <button
@@ -410,6 +431,19 @@ export const ProjectDetail: React.FC<ProjectDetailProps> = ({
                     </button>
 
                     <div className="flex items-center gap-1.5">
+                      <button
+                        onClick={() => onToggleShortcut(scriptName, customArgsMap[scriptName])}
+                        title={isShortcut(scriptName) ? '从快捷方式中移除' : '添加到悬浮快捷方式'}
+                        className={`p-1 rounded transition-colors ${
+                          isShortcut(scriptName)
+                            ? 'text-accent-amber bg-accent-amber/10 hover:bg-accent-amber/20'
+                            : 'text-dark-500 hover:text-dark-200 hover:bg-dark-700'
+                        }`}
+                      >
+                        <Pin
+                          className={`w-3.5 h-3.5 ${isShortcut(scriptName) ? 'fill-current' : ''}`}
+                        />
+                      </button>
                       {isRunning ? (
                         <>
                           {/* 重启按钮 */}

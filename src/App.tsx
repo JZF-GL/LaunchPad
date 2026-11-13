@@ -1,14 +1,32 @@
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useRef } from 'react'
 import { Sidebar } from './components/Sidebar'
 import { ProjectDetail } from './components/ProjectDetail'
 import { TerminalView } from './components/TerminalView'
 import { StatusDashboard } from './components/StatusDashboard'
 import { PortConflictModal } from './components/PortConflictModal'
 import { TitleBar } from './components/TitleBar'
-import { ProjectItem, RunningTask, PortConflictInfo, SystemEnvInfo } from './types'
+import { ProjectItem, RunningTask, PortConflictInfo, SystemEnvInfo, ShortcutItem } from './types'
 import { FolderPlus, Boxes, HardDriveDownload } from 'lucide-react'
 
 const STORAGE_KEY = 'launchpad_projects_v1'
+const SHORTCUTS_STORAGE_KEY = 'launchpad_shortcuts_v1'
+
+function loadShortcuts(): ShortcutItem[] {
+  try {
+    const cached = localStorage.getItem(SHORTCUTS_STORAGE_KEY)
+    if (!cached) return []
+    const list = JSON.parse(cached)
+    return Array.isArray(list) ? (list as ShortcutItem[]) : []
+  } catch {
+    return []
+  }
+}
+
+function persistShortcuts(list: ShortcutItem[]) {
+  try {
+    localStorage.setItem(SHORTCUTS_STORAGE_KEY, JSON.stringify(list))
+  } catch {}
+}
 
 export const App: React.FC = () => {
   const [projects, setProjects] = useState<ProjectItem[]>([])
@@ -18,6 +36,8 @@ export const App: React.FC = () => {
   const [conflictModal, setConflictModal] = useState<PortConflictInfo | null>(null)
   const [envInfo, setEnvInfo] = useState<SystemEnvInfo | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+  const [shortcuts, setShortcuts] = useState<ShortcutItem[]>(loadShortcuts)
+  const [isFloatingMode, setIsFloatingMode] = useState(false)
 
   // 读取已保存的项目和系统环境
   useEffect(() => {
@@ -59,6 +79,11 @@ export const App: React.FC = () => {
         setConflictModal(conflict)
       })
 
+      // 悬浮窗被关闭时，主窗口需要同步状态
+      const unsubFloating = window.electronAPI.onFloatingModeChange((active) => {
+        setIsFloatingMode(active)
+      })
+
       // 定期刷新任务及内存指标
       const tasksTimer = setInterval(() => {
         window.electronAPI.getRunningTasks().then((tasks) => {
@@ -71,6 +96,7 @@ export const App: React.FC = () => {
       return () => {
         unsubStatus()
         unsubConflict()
+        unsubFloating()
         clearInterval(tasksTimer)
       }
     }
@@ -173,7 +199,79 @@ export const App: React.FC = () => {
     }
   }
 
+  // 切换某个 script 是否加入悬浮快捷方式
+  const handleToggleShortcut = (scriptName: string, customArgs?: string) => {
+    if (!selectedProject) return
+    const id = `${selectedProject.id}::${scriptName}`
+
+    setShortcuts((prev) => {
+      const exists = prev.some((s) => s.id === id)
+      const next = exists
+        ? prev.filter((s) => s.id !== id)
+        : [
+            {
+              id,
+              projectId: selectedProject.id,
+              projectName: selectedProject.name,
+              projectPath: selectedProject.path,
+              packageManager: selectedProject.packageManager,
+              scriptName,
+              customArgs,
+              createdAt: Date.now(),
+            },
+            ...prev,
+          ]
+      persistShortcuts(next)
+      return next
+    })
+  }
+
+  // 进入 / 退出悬浮快捷方式模式
+  const handleToggleFloatingMode = async () => {
+    const api = window.electronAPI
+    if (!api) return
+
+    if (isFloatingMode) {
+      await api.exitFloatingMode()
+      setIsFloatingMode(false)
+      return
+    }
+
+    // 用最新的项目信息刷新快捷方式快照（如包管理器、项目名可能已变动）
+    const resolved = shortcuts.map((s) => {
+      const p = projects.find((item) => item.id === s.projectId)
+      return p
+        ? {
+            ...s,
+            projectName: p.name,
+            projectPath: p.path,
+            packageManager: p.packageManager,
+          }
+        : s
+    })
+
+    const ok = await api.enterFloatingMode({
+      shortcuts: resolved,
+      currentProjectId: selectedProjectId,
+      currentProjectName: selectedProject?.name,
+    })
+    if (ok) setIsFloatingMode(true)
+  }
+
   const selectedProject = projects.find((p) => p.id === selectedProjectId) || null
+
+  // 切换项目（或首次拿到运行中的任务）时，自动切到该项目的终端
+  const prevProjectRef = useRef(selectedProjectId)
+  useEffect(() => {
+    const projectChanged = prevProjectRef.current !== selectedProjectId
+    prevProjectRef.current = selectedProjectId
+
+    if (!selectedProjectId) return
+    if (!projectChanged && activeTaskId) return
+
+    const task = runningTasks.find((t) => t.projectId === selectedProjectId)
+    if (task) setActiveTaskId(task.taskId)
+  }, [selectedProjectId, runningTasks, activeTaskId])
 
   // 拖拽导入文件夹支持
   const handleDragOver = (e: React.DragEvent) => {
@@ -210,7 +308,12 @@ export const App: React.FC = () => {
       className="flex flex-col h-screen w-screen bg-dark-950 text-dark-100 font-sans select-none overflow-hidden border border-dark-600/70 shadow-2xl"
     >
       {/* 自定义顶部窗口外边框 / 标题栏 */}
-      <TitleBar currentProject={selectedProject} />
+      <TitleBar
+        currentProject={selectedProject}
+        shortcutCount={shortcuts.length}
+        isFloatingMode={isFloatingMode}
+        onToggleFloatingMode={handleToggleFloatingMode}
+      />
 
       {/* 拖拽导入高亮覆盖层 */}
       {isDragging && (
@@ -248,8 +351,10 @@ export const App: React.FC = () => {
                 <ProjectDetail
                   project={selectedProject}
                   runningTasks={runningTasks}
+                  shortcuts={shortcuts}
                   onRunScript={handleRunScript}
                   onStopScript={handleStopScript}
+                  onToggleShortcut={handleToggleShortcut}
                   onRefreshProject={handleRefreshProject}
                   onOpenFolder={(path) => window.electronAPI?.openPath(path)}
                   onOpenVSCode={(path) => window.electronAPI?.openVSCode(path)}

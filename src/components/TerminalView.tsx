@@ -5,8 +5,6 @@ import { WebLinksAddon } from '@xterm/addon-web-links'
 import {
   Trash2,
   Square,
-  Globe,
-  ExternalLink,
   Terminal as TerminalIcon,
   Copy,
   Check,
@@ -21,6 +19,13 @@ interface TerminalViewProps {
   onOpenExternal: (url: string) => void
 }
 
+interface TerminalRecord {
+  term: XTerm
+  fitAddon: FitAddon
+  /** 该任务专属的渲染容器，切换任务时只做显示 / 隐藏 */
+  wrapper: HTMLDivElement
+}
+
 export const TerminalView: React.FC<TerminalViewProps> = ({
   activeTaskId,
   runningTasks,
@@ -29,28 +34,38 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
   onOpenExternal,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null)
-  const termInstanceMap = useRef<Map<string, { term: XTerm; fitAddon: FitAddon }>>(new Map())
-  const [detectedUrls, setDetectedUrls] = useState<string[]>([])
+  const termInstanceMap = useRef<Map<string, TerminalRecord>>(new Map())
   const [copied, setCopied] = useState(false)
 
-  // 提取 URL 正则
-  const extractUrls = (text: string) => {
-    const urlRegex = /(https?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\]|(?:\d{1,3}\.){3}\d{1,3}):\d{2,5}(?:\/[^\s\x1b]*)?)/g
-    const matches = text.match(urlRegex)
-    if (matches) {
-      setDetectedUrls((prev) => {
-        const set = new Set([...prev, ...matches])
-        return Array.from(set)
-      })
-    }
-  }
-
-  // 初始化或切换终端
+  // 链接回调保持最新，同时避免它变化导致终端被重建
+  const onOpenExternalRef = useRef(onOpenExternal)
   useEffect(() => {
-    if (!containerRef.current || !activeTaskId) return
+    onOpenExternalRef.current = onOpenExternal
+  }, [onOpenExternal])
 
-    // 如果该任务的 Terminal 还未创建
+  /**
+   * 每个任务使用独立的容器 + 独立的 xterm 实例，切换任务时只切换容器的显隐。
+   *
+   * 之前是共用一个容器 + 每次切换都调用 term.open()，但 xterm 的 open() 对已经
+   * 打开过的实例是空操作，而容器又被 innerHTML 清空了，所以切回去就是一片空白。
+   * 现在容器和实例都常驻，隐藏的终端继续接收输出，切回来直接显示缓冲区内容。
+   */
+  useEffect(() => {
+    const host = containerRef.current
+    if (!host) return
+    if (!activeTaskId) {
+      termInstanceMap.current.forEach((record) => {
+        record.wrapper.style.display = 'none'
+      })
+      return
+    }
+
     if (!termInstanceMap.current.has(activeTaskId)) {
+      const wrapper = document.createElement('div')
+      wrapper.className = 'absolute inset-0 w-full h-full'
+      wrapper.style.display = 'none'
+      host.appendChild(wrapper)
+
       const term = new XTerm({
         cursorBlink: true,
         fontSize: 13,
@@ -82,57 +97,86 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
       const fitAddon = new FitAddon()
       const webLinksAddon = new WebLinksAddon((_, uri) => {
-        onOpenExternal(uri)
+        onOpenExternalRef.current(uri)
       })
 
       term.loadAddon(fitAddon)
       term.loadAddon(webLinksAddon)
+      term.open(wrapper)
 
-      termInstanceMap.current.set(activeTaskId, { term, fitAddon })
+      termInstanceMap.current.set(activeTaskId, { term, fitAddon, wrapper })
 
-      // 获取已有历史日志
+      // 补上该任务在此终端创建之前的输出
       if (window.electronAPI?.getTaskLogs) {
         window.electronAPI.getTaskLogs(activeTaskId).then((logs) => {
-          logs.forEach((chunk) => {
-            term.write(chunk)
-            extractUrls(chunk)
-          })
+          logs.forEach((chunk) => term.write(chunk))
         })
       }
     }
 
-    const { term, fitAddon } = termInstanceMap.current.get(activeTaskId)!
+    // 只显示当前任务的终端，其余保持挂载（缓冲区与滚动位置都不会丢）
+    termInstanceMap.current.forEach((record, taskId) => {
+      record.wrapper.style.display = taskId === activeTaskId ? 'block' : 'none'
+    })
 
-    // 挂载到 DOM
-    containerRef.current.innerHTML = ''
-    term.open(containerRef.current)
-    try {
-      fitAddon.fit()
-    } catch {}
+    const record = termInstanceMap.current.get(activeTaskId)!
+
+    // 等容器完成布局后再 fit，避免在隐藏容器里算出错误尺寸
+    const frame = requestAnimationFrame(() => {
+      try {
+        record.fitAddon.fit()
+      } catch {}
+      record.term.refresh(0, record.term.rows - 1)
+      record.term.focus()
+    })
 
     const resizeObserver = new ResizeObserver(() => {
       try {
-        fitAddon.fit()
+        record.fitAddon.fit()
       } catch {}
     })
-
-    if (containerRef.current) {
-      resizeObserver.observe(containerRef.current)
-    }
+    resizeObserver.observe(host)
 
     const handleResize = () => {
       try {
-        fitAddon.fit()
+        record.fitAddon.fit()
       } catch {}
     }
-
     window.addEventListener('resize', handleResize)
 
     return () => {
+      cancelAnimationFrame(frame)
       resizeObserver.disconnect()
       window.removeEventListener('resize', handleResize)
     }
   }, [activeTaskId])
+
+  // 组件卸载时释放所有终端实例
+  useEffect(() => {
+    const map = termInstanceMap.current
+    return () => {
+      map.forEach((record) => {
+        try {
+          record.term.dispose()
+        } catch {}
+      })
+      map.clear()
+      if (containerRef.current) containerRef.current.innerHTML = ''
+    }
+  }, [])
+
+  // 任务结束后释放对应的终端实例（当前正在查看的那个保留，方便继续看最后的输出）
+  useEffect(() => {
+    const alive = new Set(runningTasks.map((t) => t.taskId))
+    termInstanceMap.current.forEach((record, taskId) => {
+      if (alive.has(taskId) || taskId === activeTaskId) return
+      try {
+        record.term.dispose()
+      } catch {}
+      record.wrapper.remove()
+      termInstanceMap.current.delete(taskId)
+    })
+  }, [runningTasks, activeTaskId])
 
   // 监听实时日志
   useEffect(() => {
@@ -142,15 +186,12 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
       if (record) {
         record.term.write(data)
       }
-      if (taskId === activeTaskId) {
-        extractUrls(data)
-      }
     })
 
     return () => {
       unsubscribe()
     }
-  }, [activeTaskId])
+  }, [])
 
   const handleClear = () => {
     if (!activeTaskId) return
@@ -158,7 +199,6 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
     if (record) {
       record.term.clear()
     }
-    setDetectedUrls([])
   }
 
   const handleCopyLogs = () => {
@@ -217,24 +257,6 @@ export const TerminalView: React.FC<TerminalViewProps> = ({
 
         {/* 右侧工具按钮 */}
         <div className="flex items-center space-x-2">
-          {/* 检测到的 Localhost URL 快速跳转 */}
-          {detectedUrls.length > 0 && (
-            <div className="flex items-center gap-1.5 mr-2">
-              {detectedUrls.slice(0, 2).map((url) => (
-                <button
-                  key={url}
-                  onClick={() => onOpenExternal(url)}
-                  title={`在浏览器中打开: ${url}`}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded bg-accent-blue/15 hover:bg-accent-blue/25 text-accent-blue border border-accent-blue/30 text-xs font-mono font-medium transition-colors"
-                >
-                  <Globe className="w-3.5 h-3.5" />
-                  <span className="truncate max-w-[150px]">{url}</span>
-                  <ExternalLink className="w-3 h-3 ml-0.5" />
-                </button>
-              ))}
-            </div>
-          )}
-
           <button
             onClick={handleCopyLogs}
             title="复制控制台输出"
