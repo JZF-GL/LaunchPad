@@ -28,6 +28,24 @@ export class ProcessManager {
   setWindow(win: BrowserWindow) {
     this.win = win
     this.addWindow(win)
+    // 窗口被销毁后清掉引用，避免退出时继续向已销毁的 webContents 发送事件
+    win.once('closed', () => {
+      if (this.win === win) this.win = null
+    })
+  }
+
+  /**
+   * 只往仍然存活的主窗口发送事件。
+   * 退出流程里窗口往往已经关闭，这时再 send 会抛异常，把 stopAll / app.quit 卡住。
+   */
+  private sendToMain(channel: string, payload: unknown) {
+    const win = this.win
+    if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return
+    try {
+      win.webContents.send(channel, payload)
+    } catch {
+      // 窗口正在销毁，忽略即可
+    }
   }
 
   /** 注册一个需要接收任务状态广播的窗口 */
@@ -43,8 +61,11 @@ export class ProcessManager {
   /** 向所有已注册窗口广播事件 */
   private broadcast(channel: string, payload: unknown) {
     for (const target of this.windows) {
-      if (!target.isDestroyed()) {
+      if (target.isDestroyed() || target.webContents.isDestroyed()) continue
+      try {
         target.webContents.send(channel, payload)
+      } catch {
+        // 窗口正在销毁，忽略即可
       }
     }
   }
@@ -208,7 +229,7 @@ export class ProcessManager {
         }
         
         // 推送终端输出
-        this.win?.webContents.send('terminal:data', { taskId, data: text })
+        this.sendToMain('terminal:data', { taskId, data: text })
 
         // 智能分析端口占用
         this.detectPortConflict(text, taskId, projectId, scriptName)
@@ -237,7 +258,7 @@ export class ProcessManager {
           this.tasks.delete(taskId)
         }
         const exitMsg = `\r\n\x1b[90m[LaunchPad 进程已结束，退出码: ${code}]\x1b[0m\r\n`
-        this.win?.webContents.send('terminal:data', { taskId, data: exitMsg })
+        this.sendToMain('terminal:data', { taskId, data: exitMsg })
       })
 
       return { success: true, taskId }
@@ -261,21 +282,27 @@ export class ProcessManager {
         if (err) {
           console.error(`Failed to kill process tree for PID ${pid}:`, err)
         }
-        record.task.status = 'stopped'
-        this.notifyTaskStatusChange(record.task)
-        this.tasks.delete(taskId)
-        
-        const stopMsg = `\r\n\x1b[33m[LaunchPad 已主动终止该进程树 (PID: ${pid})]\x1b[0m\r\n`
-        this.win?.webContents.send('terminal:data', { taskId, data: stopMsg })
-        
+        // 这里已经可能处于退出流程（窗口已销毁），任何一步失败都不能让 Promise 挂住，
+        // 否则 stopAll / app.quit 会一直等下去，应用就退不掉了。
+        try {
+          record.task.status = 'stopped'
+          this.notifyTaskStatusChange(record.task)
+          this.tasks.delete(taskId)
+
+          const stopMsg = `\r\n\x1b[33m[LaunchPad 已主动终止该进程树 (PID: ${pid})]\x1b[0m\r\n`
+          this.sendToMain('terminal:data', { taskId, data: stopMsg })
+        } catch (e) {
+          console.error(`Cleanup after killing PID ${pid} failed:`, e)
+        }
+
         resolve({ success: true })
       })
     })
   }
 
   async stopAll(): Promise<void> {
-    const promises = Array.from(this.tasks.keys()).map((taskId) => this.stopScript(taskId))
-    await Promise.all(promises)
+    const taskIds = Array.from(this.tasks.keys())
+    await Promise.allSettled(taskIds.map((taskId) => this.stopScript(taskId)))
   }
 
   private notifyTaskStatusChange(task: RunningTask) {
@@ -315,7 +342,7 @@ export class ProcessManager {
             processName: processInfo?.processName,
             message: `检测到端口 ${port} 被占用${processInfo ? ` (占用进程: ${processInfo.processName}, PID: ${processInfo.pid})` : ''}导致运行失败。`,
           }
-          this.win?.webContents.send('port:conflict', conflict)
+          this.sendToMain('port:conflict', conflict)
           break
         }
       }

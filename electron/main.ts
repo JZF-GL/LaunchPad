@@ -22,16 +22,18 @@ const url = process.env.VITE_DEV_SERVER_URL
 /* -------------------------------------------------------------------------- */
 
 /** 悬浮图标尺寸（图标窗口永远保持这个尺寸，不做缩放） */
-const FLOATING_ICON_SIZE = 72
+const FLOATING_ICON_SIZE = 42
 /** 展开面板尺寸 */
 const FLOATING_PANEL_WIDTH = 340
 const FLOATING_PANEL_HEIGHT = 320
 /** 鼠标离开图标/面板多久后收起 */
 const FLOATING_COLLAPSE_DELAY = 260
+/** 鼠标在图标上停留多久才展开（避免快速划过时误弹出） */
+const FLOATING_EXPAND_DELAY = 1000
 
 /**
  * 悬浮模式使用两个窗口：
- * - floatingIconWin：72x72 图标窗口，收起/展开过程中尺寸和位置都不变
+ * - floatingIconWin：42x42 图标窗口，收起/展开过程中尺寸和位置都不变
  * - floatingPanelWin：340x320 面板窗口，只在展开时显示
  *
  * 之前用同一个窗口在图标和面板之间 setBounds 缩放。Windows 上缩放透明窗口的
@@ -52,6 +54,8 @@ let floatingState: FloatingModeState | null = null
 let dragTimer: NodeJS.Timeout | null = null
 let collapseTimer: NodeJS.Timeout | null = null
 let revealTimer: NodeJS.Timeout | null = null
+/** 悬停展开的延迟计时器（鼠标快速划过时取消，不会弹出面板） */
+let expandTimer: NodeJS.Timeout | null = null
 let iconHovered = false
 let panelHovered = false
 /** 等面板渲染进程按锚点画好第一帧的回调 */
@@ -210,6 +214,10 @@ function getExpandedFloatingBounds(
 }
 
 function clearFloatingTimers() {
+  if (expandTimer) {
+    clearTimeout(expandTimer)
+    expandTimer = null
+  }
   if (collapseTimer) {
     clearTimeout(collapseTimer)
     collapseTimer = null
@@ -218,6 +226,30 @@ function clearFloatingTimers() {
     clearTimeout(revealTimer)
     revealTimer = null
   }
+}
+
+/** 取消尚未触发的悬停展开 */
+function cancelExpandTimer() {
+  if (!expandTimer) return
+  clearTimeout(expandTimer)
+  expandTimer = null
+}
+
+/**
+ * 悬停图标后延迟展开：鼠标快速划过图标时，mouseleave 会取消计时器，面板不会弹出。
+ * 收起动画进行中（floatingExpanded 仍为 true）时立即恢复，保持原来的手感。
+ */
+function scheduleExpandFloating() {
+  if (dragTimer) return
+  if (floatingExpanded) {
+    expandFloating()
+    return
+  }
+  if (expandTimer) return
+  expandTimer = setTimeout(() => {
+    expandTimer = null
+    if (iconHovered && !dragTimer) expandFloating()
+  }, FLOATING_EXPAND_DELAY)
 }
 
 /** 收起：面板窗口不隐藏，只清空内容并恢复鼠标穿透，图标窗口始终在原位 */
@@ -266,6 +298,7 @@ function expandFloating() {
   const panel = floatingPanelWin
   if (!iconWin || iconWin.isDestroyed() || !panel || panel.isDestroyed()) return
   if (dragTimer) return
+  cancelExpandTimer()
 
   if (floatingExpanded) {
     // 收起动画还没结束又移回图标：让面板直接重新展开
@@ -327,9 +360,15 @@ function setFloatingHover(source: 'icon' | 'panel', hovering: boolean) {
       clearTimeout(collapseTimer)
       collapseTimer = null
     }
-    if (iconHovered) expandFloating()
+    if (iconHovered) {
+      scheduleExpandFloating()
+    } else {
+      // 已经移进面板了，不需要再等图标悬停
+      cancelExpandTimer()
+    }
     return
   }
+  cancelExpandTimer()
   if (!floatingExpanded || dragTimer) return
   if (collapseTimer) clearTimeout(collapseTimer)
   collapseTimer = setTimeout(() => {
@@ -450,13 +489,11 @@ function createWindow() {
     win.loadFile(path.join(process.env.DIST!, 'index.html'))
   }
 
-  // 窗口关闭时终止所有后台任务
-  win.on('close', async () => {
-    await processManager.stopAll()
-  })
+  // 窗口关闭后由 window-all-closed 触发退出，进程清理由 before-quit 统一处理
 }
 
 // 单实例锁定：防止重复打开多个应用窗口
+let isQuitting = false
 const gotTheLock = app.requestSingleInstanceLock()
 
 if (!gotTheLock) {
@@ -486,8 +523,22 @@ if (!gotTheLock) {
   })
 }
 
-app.on('window-all-closed', async () => {
-  await processManager.stopAll()
+app.on('before-quit', (event) => {
+  if (isQuitting) return
+  // 拦下第一次退出：先把应用里启动的所有项目进程结束掉，再真正退出
+  event.preventDefault()
+  isQuitting = true
+
+  const stopAll = processManager.stopAll().catch((err) => {
+    console.error('退出前结束项目进程失败:', err)
+  })
+  // 兜底：极端情况下（taskkill 无响应）也不能让应用退不掉
+  const timeout = new Promise<void>((resolve) => setTimeout(resolve, 5000))
+
+  Promise.race([stopAll, timeout]).finally(() => app.quit())
+})
+
+app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
     app.quit()
   }

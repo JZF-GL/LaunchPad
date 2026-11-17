@@ -11,7 +11,7 @@ import {
 import { FloatingAnchor, FloatingModeState, RunningTask, ShortcutItem } from '../types'
 
 /** 与主进程 FLOATING_ICON_SIZE / FLOATING_PANEL_WIDTH / FLOATING_PANEL_HEIGHT 保持一致 */
-const ICON_SIZE = 72
+const ICON_SIZE = 42
 const PANEL_WIDTH = 340
 const PANEL_HEIGHT = 320
 /** 揭示 / 收回动画时长 (ms) */
@@ -261,10 +261,10 @@ export const FloatingDock: React.FC = () => {
                 anchor.vertical === 'bottom' ? 'flex-col-reverse' : 'flex-col'
               }`}
             >
-              {/* 顶部：项目信息 + 返回主界面（图标占用锚点角，这里让出 72px） */}
+              {/* 顶部：项目信息 + 返回主界面（图标占用锚点角，这里让出图标尺寸） */}
               <header
-                className={`h-[72px] flex-shrink-0 flex items-center gap-2 bg-dark-950/60 border-dark-600/60 ${
-                  anchor.horizontal === 'right' ? 'pl-3 pr-[80px]' : 'pl-[80px] pr-3'
+                className={`h-[56px] flex-shrink-0 flex items-center gap-2 bg-dark-950/60 border-dark-600/60 ${
+                  anchor.horizontal === 'right' ? 'pl-3 pr-[50px]' : 'pl-[50px] pr-3'
                 } ${anchor.vertical === 'bottom' ? 'border-t' : 'border-b'}`}
               >
                 <div className="flex-1 min-w-0">
@@ -372,12 +372,12 @@ export const FloatingDock: React.FC = () => {
       <div
         {...dragProps}
         title={dragging ? '松开结束拖动' : '按住拖动可移动位置'}
-        className={`absolute z-10 w-[72px] h-[72px] rounded-2xl bg-gradient-to-tr from-accent-blue via-accent-purple to-accent-cyan border border-white/20 flex items-center justify-center cursor-grab active:cursor-grabbing ${panelPosition}`}
+        className={`absolute z-10 w-[42px] h-[42px] rounded-xl bg-gradient-to-tr from-accent-blue via-accent-purple to-accent-cyan border border-white/20 flex items-center justify-center cursor-grab active:cursor-grabbing ${panelPosition}`}
         style={{ opacity: expanded ? 1 : 0, pointerEvents: expanded ? 'auto' : 'none' }}
       >
-        <Zap className="w-7 h-7 text-white drop-shadow" />
+        <Zap className="w-[18px] h-[18px] text-white drop-shadow" />
         {runningCount > 0 && (
-          <span className="absolute bottom-1 right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-accent-green text-dark-950 text-[10px] font-bold flex items-center justify-center border-2 border-dark-900">
+          <span className="absolute bottom-0.5 right-0.5 min-w-[13px] h-[13px] px-0.5 rounded-full bg-accent-green text-dark-950 text-[8px] font-bold flex items-center justify-center border border-dark-900">
             {runningCount}
           </span>
         )}
